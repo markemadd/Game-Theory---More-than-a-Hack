@@ -202,19 +202,35 @@ def predict(net, scaler, match, with_change=False):
     return prob
 
 
-def weights_path():
-    return os.path.join(io_atd.MODELS_DIR, "gru_t{}.pt".format(config.TRIAL))
+def seeds():
+    """Training seeds; trials with several average the GRUs' probabilities."""
+    return list(config.CFG.get("seq_seeds", (SEED,)))
 
 
-def save(net, scaler):
+def weights_path(seed=None):
+    if len(seeds()) == 1:
+        return os.path.join(io_atd.MODELS_DIR, "gru_t{}.pt".format(config.TRIAL))
+    return os.path.join(io_atd.MODELS_DIR, "gru_t{}_s{}.pt".format(config.TRIAL, seed))
+
+
+def save(net, scaler, seed=None):
     os.makedirs(io_atd.MODELS_DIR, exist_ok=True)
     torch.save({"state": {k: v.cpu() for k, v in net.state_dict().items()},
                 "mu": torch.from_numpy(scaler.mu), "sd": torch.from_numpy(scaler.sd)},
-               weights_path())
+               weights_path(seed))
 
 
-def load():
-    blob = torch.load(weights_path(), map_location="cpu", weights_only=True)
+def load_all():
+    """[(net, scaler)] for every training seed of the trial."""
+    return [load(sd) for sd in seeds()]
+
+
+def predict_all(models, match):
+    return np.mean([predict(net, scaler, match) for net, scaler in models], 0)
+
+
+def load(seed=None):
+    blob = torch.load(weights_path(seed), map_location="cpu", weights_only=True)
     scaler = Scaler()
     scaler.mu, scaler.sd = blob["mu"].numpy(), blob["sd"].numpy()
     net = Net(len(scaler.mu), config.CFG.get("seq_hidden", 64),
@@ -223,14 +239,18 @@ def load():
     return net.to(device()).eval(), scaler
 
 
-def final():
-    """Train on all external matches, predict the provided match."""
+def final(only=None):
+    """Train on all external matches (once per training seed), predict the provided match.
+    only: train just this seed (the others must already be in models/)."""
     profile = degrade.atd_gap_profile(io_atd.load_match())
     ids = io_idsse.available()
     seqs = [s for i, m in enumerate(ids) for s in sequences(io_idsse.load_match(m), profile, SEED + i)]
-    net, scaler = train(seqs)
-    save(net, scaler)
-    prob = predict(net, scaler, io_atd.load_match())
+    for sd in seeds():
+        if only is None or sd == only:
+            net, scaler = train(seqs, seed=sd)
+            save(net, scaler, sd)
+            print("trained GRU seed", sd, flush=True)
+    prob = predict_all(load_all(), io_atd.load_match())
     np.savez(os.path.join(io_atd.CACHE_DIR, "bar_prob_seq_t{}.npz".format(config.TRIAL)), prob=prob)
     print("saved GRU probabilities for BAR-ATH")
 
@@ -239,7 +259,7 @@ def main():
     if "--trial" in sys.argv:
         config.set_trial(sys.argv[sys.argv.index("--trial") + 1])
     if "--final" in sys.argv:
-        return final()
+        return final(int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else None)
     from . import cv
     profile = degrade.atd_gap_profile(io_atd.load_match())
     ids = io_idsse.available()
@@ -250,10 +270,11 @@ def main():
         if os.path.isfile(cache):
             continue
         t0 = time.time()
-        net, scaler = train([s for m in ids if m != held for s in seqs[m]])
         test = degrade.degrade(matches[held], profile, np.random.default_rng(cv.SEED + 100 + i),
                                anchor_frac=0.3)
-        np.savez(cache, prob=predict(net, scaler, test))
+        probs = [predict(*train([s for m in ids if m != held for s in seqs[m]], seed=sd), test)
+                 for sd in seeds()]
+        np.savez(cache, prob=np.mean(probs, 0))
         print("seq fold {} done in {:.0f}s".format(held, time.time() - t0), flush=True)
 
 

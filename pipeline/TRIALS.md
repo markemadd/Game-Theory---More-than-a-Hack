@@ -360,4 +360,20 @@ are blurred to the provided match's confidence (temperature 1.4). Seed 2028: -0.
 shift, -0.0008 with it; the kept share itself moves with the seed. Not kept. On the provided match
 it would have chosen cost 4 (3.1 possessions per minute, 0.35% of graded frames changed).
 
-**Submitted: trial 7** (`models/gru_t7.pt`, `models/settings_t7.json`, trees `trees_t6.joblib`).
+**Trial 7 was committed as the fallback; trial 8 replaced it as the submission.**
+
+## 17 Nov: trial 8, two GRU seeds averaged (submitted)
+
+Trial 7 trained with seeds 2027 and 2028; the two GRUs' probabilities are averaged before the mix
+with the trees (`config` `seq_seeds`, `seq_model.predict_all`). The seed-2027 member is trial 7's
+GRU (same settings and seed, deterministic training); seed 2028 was trained on all seven matches.
+
+External, the out-of-fold predictions of both seed runs averaged, standard selection
+(`pipeline.ensemble --trial 8`): GRU weight 0.75, decoder (6, 32, 24), spellF1 0.7564, macroF1
+0.9346 (trial 7 under the same procedure: 0.7527 / 0.9334). At the trial 7 decoder (12, 24, 32)
+the average scores 0.7540 against 0.7530 and 0.7454 for the single seeds; the median over 32
+decoder settings is 0.7542 against 0.7505 and 0.7454. Averaging all four GRUs (trials 6 and 7,
+both seeds) is not better (0.7531 at the same settings).
+
+Provided match, no labels: 3.0 possessions per minute (trial 7: 2.9), dead share 44.5%; 1.7% of
+graded frames differ from trial 7. Public window (check only): spellF1 0.703, macroF1 0.919.

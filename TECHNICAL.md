@@ -31,7 +31,8 @@ making their tracking look like ours.
    possessions: plain cross-entropy counts frames, while the ranking metric counts possessions.
    It also has a second output trained to predict where a new possession starts; that output
    is not used at inference, but learning it makes the H/A/D probabilities better.
-   Final probabilities are 0.75 GRU + 0.25 trees.
+   The GRU is trained twice with different seeds and the two are averaged, which removes most of
+   the run-to-run luck of a single training. Final probabilities are 0.75 GRU + 0.25 trees.
 6. **Our own ball detector** (`ball_detector.py`). The ATD has no ball on 40.7% of graded frames.
    A public pre-trained YOLO11s was fine-tuned on the tactical video with labels produced by
    agreement of two algorithms (see *Training data*), then run on the gap frames. Detections are
@@ -100,13 +101,15 @@ Leave-one-match-out on the seven external matches, each degraded like the ATD:
 | GRU + decoder (ATD ball only, trial 3) | 0.703 | 0.916 |
 | GRU + decoder (with the filled-ball gap profile, trial 5) | 0.736 | 0.929 |
 | weighted GRU 0.75 + trees 0.25 (trial 6) | 0.743 | 0.931 |
-| **submitted: same, GRU also trained to predict possession starts (trial 7)** | **0.753** | **0.933** |
+| same, GRU also trained to predict possession starts (trial 7) | 0.753 | 0.933 |
+| **submitted: trial 7 with two GRU seeds averaged (trial 8)** | **0.756** | **0.935** |
 
 Retrained with a second seed, trial 6 scores 0.741 / 0.930 and trial 7 0.745 / 0.934: trial 7 is ahead with both
 seeds (+0.010 and +0.004 spellF1) and at every decoder setting tried, so the choice does not rest on one lucky run.
+Averaging the two seeds scores at least as well as the better one and steadies the per-match results.
 
-Public 5-minute window (17 possessions, a check only, never used to choose): spellF1 0.671, macroF1
-0.922, frame accuracy 93.2%, 17 possessions found, dead-ball recall 0.82 at precision 0.97. The
+Public 5-minute window (17 possessions, a check only, never used to choose): spellF1 0.703, macroF1
+0.919, frame accuracy 92.7%, 16 possessions found, dead-ball recall 0.83 at precision 0.97. The
 evaluation tool's bootstrap puts the noise band on this window at about 0.33 spellF1.
 
 ## Limitations
@@ -156,11 +159,11 @@ bash pipeline/fetch_idsse.sh                                   # external matche
 .venv/bin/python -m pipeline.ball_detector label_agree         # algorithmic ball labels
 .venv/bin/python -m pipeline.ball_detector train --base yolo11s.pt --epochs 20
 .venv/bin/python -m pipeline.ball_detector fill --weights cache/ball/runs/ball_agree/weights/best.pt
-.venv/bin/python -m pipeline.cv --trial 7                      # trees: validation (same trees as trial 6)
-.venv/bin/python -m pipeline.seq_model --trial 7               # GRU: validation
-.venv/bin/python -m pipeline.ensemble --trial 7                # mix + decoder -> cache/ensemble_t7.json
+.venv/bin/python -m pipeline.cv --trial 8                      # trees: validation (same trees as trial 6)
+.venv/bin/python -m pipeline.seq_model --trial 8               # GRU: validation, both seeds averaged
+.venv/bin/python -m pipeline.ensemble --trial 8                # mix + decoder -> cache/ensemble_t8.json
 .venv/bin/python -m pipeline.run_trial --trial 6               # trees on all matches -> models/trees_t6.joblib
-.venv/bin/python -m pipeline.seq_model --trial 7 --final       # GRU on all matches -> models/gru_t7.pt
-# models/settings_t7.json = cache/ensemble_t7.json plus "trees": "trees_t6.joblib"
+.venv/bin/python -m pipeline.seq_model --trial 8 --final       # both GRUs on all matches -> models/gru_t8_s*.pt
+# models/settings_t8.json = cache/ensemble_t8.json plus "trees": "trees_t6.joblib"
 cp cache/ball/runs/ball_agree/weights/best.pt models/ball_detector.pt
 ```

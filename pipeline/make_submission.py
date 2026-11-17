@@ -7,7 +7,7 @@ Steps (nothing is trained here; see README-pipeline.md for the training commands
   1. fill the ATD's ball gaps with our detector on the tactical video   (models/ball_detector.pt)
   2. align the broadcast ATD to the tactical one -> "TV is away from live play" signal
   3. H/A/D probabilities per frame from the trees and the GRU           (models/trees_t6.joblib,
-                                                                         models/gru_t7.pt)
+                                                                         models/gru_t8_s*.pt)
   4. mix them, fuse the broadcast signal, decode possessions, write the CSV
 
 Step 1 decodes about 13,000 video frames and is the slow part; its result is cached in
@@ -23,7 +23,7 @@ import numpy as np
 
 from . import broadcast, config, decode, fuse, io_atd, model, seq_model
 
-TRIAL = 7
+TRIAL = 8
 
 
 def main():
@@ -46,8 +46,7 @@ def main():
     bar = io_atd.load_match()
     with open(args.settings or os.path.join(models, "settings_t{}.json".format(TRIAL))) as handle:
         settings = json.load(handle)
-    net, scaler = seq_model.load()
-    prob = seq_model.predict(net, scaler, bar)
+    prob = seq_model.predict_all(seq_model.load_all(), bar)  # averaged over the training seeds
     w = settings["gru_weight"]
     if w < 1:
         # trial 7 changed only the GRU, so it reuses trial 6's trees (same features, same fit)

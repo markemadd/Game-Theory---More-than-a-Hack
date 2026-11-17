@@ -31,8 +31,12 @@ TRIALS = {
     7: dict(ball_sigma=7.0, ball_noise_m=0.3, touch_dv=2.5, restart_features=True,
             dead_ball_behaviour=True, still_mask=0.1, oob_mask=0.4, filled_ball=True,
             seq_epochs=8, seq_spell_power=0.5, seq_change_weight=1.0),
+    # Trial 8: trial 7 trained with two seeds; the two GRUs' probabilities are averaged.
+    8: dict(ball_sigma=7.0, ball_noise_m=0.3, touch_dv=2.5, restart_features=True,
+            dead_ball_behaviour=True, still_mask=0.1, oob_mask=0.4, filled_ball=True,
+            seq_epochs=8, seq_spell_power=0.5, seq_change_weight=1.0, seq_seeds=(2027, 2028)),
 }
-LATEST = 7  # the submitted trial
+LATEST = 8  # the submitted trial
 LATEST_ALL = max(TRIALS)
 
 TRIAL = int(os.environ.get("MTAH_TRIAL", LATEST))
