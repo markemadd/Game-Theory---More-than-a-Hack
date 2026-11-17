@@ -62,3 +62,7 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# -- trial pipeline: caches and external data (never commit) --
+cache/
+ext_data/

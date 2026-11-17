@@ -1,3 +1,15 @@
+> **Team Game Theory — More than a Hack 2027 submission.** This is a fork of the competition
+> repository with our pipeline added. Method, training data, results and limitations:
+> **[TECHNICAL.md](TECHNICAL.md)**; full experiment log: [pipeline/TRIALS.md](pipeline/TRIALS.md).
+> Regenerate the submitted file (data bundle unpacked into `data/` as described in DATA.md):
+>
+> ```bash
+> python3.12 -m venv .venv && .venv/bin/pip install -r requirements-pipeline.txt
+> .venv/bin/python -m pipeline.make_submission --out Game_Theory.csv
+> ```
+>
+> The match data is not in this repository and must not be added to it.
+
 # More than a Hack 2027 — Phase 1: Ball Possession
 
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)

@@ -1,0 +1,1 @@
+{"gru_weight": 0.75, "decoder": {"alpha": 1.0, "c_switch": 12, "c_in": 8, "c_out": 16}, "spell_f1": 0.7419851482154165, "macro_f1": 0.930862521786277}
