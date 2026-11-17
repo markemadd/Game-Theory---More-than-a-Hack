@@ -5,7 +5,7 @@
 >
 > ```bash
 > python3.12 -m venv .venv && .venv/bin/pip install -r requirements-pipeline.txt
-> .venv/bin/python -m pipeline.make_submission --out Game_Theory.csv
+> .venv/bin/python -m pipeline.make_submission --out Game_Theory.csv   # ~45 min with a GPU, ~3.5 h on CPU
 > ```
 >
 > The match data is not in this repository and must not be added to it.

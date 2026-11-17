@@ -74,8 +74,10 @@ tactical video's audio (dominated by crowd noise). Smart Tagging was fused like 
 
 No person labelled, corrected or selected anything on the provided game. No ground truth of the
 provided game was used for training or tuning. The public 5-minute window was used only as a
-pipeline check after each trial; decoder costs, the model mix and every design choice were
-selected on the external matches. Pre-trained weights: Ultralytics `yolo11s.pt` (COCO).
+pipeline check after each trial; decoder costs, the model mix and every adopted change were
+selected on the external matches. Two signals that exist only for the provided match (Smart
+Tagging, shirt colours) could not be scored externally and were dropped for the structural
+reasons given in *Assets used*. Pre-trained weights: Ultralytics `yolo11s.pt` (COCO).
 
 ## Possession rules implemented
 
@@ -146,7 +148,8 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements-pipeline.txt
 .venv/bin/python evaluation/validate_submission.py submission.csv
 ```
 
-`make_submission` uses the trained weights in `models/` and trains nothing: it runs the ball
+`make_submission` uses the trained weights in `models/` and trains nothing (about 45 minutes with a
+GPU; about 3.5 hours on CPU only, almost all of it the ball detector): it runs the ball
 detector on the gap frames of the tactical video (the slow step), aligns the broadcast, predicts,
 fuses and decodes. Seeds are fixed and dependencies pinned. Re-running it on the development
 machine reproduces the submitted file byte for byte; on other hardware the detector's floating
