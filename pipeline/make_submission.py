@@ -7,7 +7,7 @@ Steps (nothing is trained here; see README-pipeline.md for the training commands
   1. fill the ATD's ball gaps with our detector on the tactical video   (models/ball_detector.pt)
   2. align the broadcast ATD to the tactical one -> "TV is away from live play" signal
   3. H/A/D probabilities per frame from the trees and the GRU           (models/trees_t6.joblib,
-                                                                         models/gru_t6.pt)
+                                                                         models/gru_t7.pt)
   4. mix them, fuse the broadcast signal, decode possessions, write the CSV
 
 Step 1 decodes about 13,000 video frames and is the slow part; its result is cached in
@@ -23,12 +23,13 @@ import numpy as np
 
 from . import broadcast, config, decode, fuse, io_atd, model, seq_model
 
-TRIAL = 6
+TRIAL = 7
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(io_atd.ROOT, "evaluation", "results", "submission.csv"))
+    ap.add_argument("--settings", help="settings JSON (default: models/settings_t<TRIAL>.json)")
     args = ap.parse_args()
     config.set_trial(TRIAL)
     models = io_atd.MODELS_DIR
@@ -43,19 +44,27 @@ def main():
 
     print("3/4 frame probabilities", flush=True)
     bar = io_atd.load_match()
-    with open(os.path.join(models, "settings_t{}.json".format(TRIAL))) as handle:
+    with open(args.settings or os.path.join(models, "settings_t{}.json".format(TRIAL))) as handle:
         settings = json.load(handle)
     net, scaler = seq_model.load()
     prob = seq_model.predict(net, scaler, bar)
     w = settings["gru_weight"]
     if w < 1:
-        trees = joblib.load(os.path.join(models, "trees_t{}.joblib".format(TRIAL)))
+        # trial 7 changed only the GRU, so it reuses trial 6's trees (same features, same fit)
+        trees = joblib.load(os.path.join(models, settings.get("trees", "trees_t{}.joblib".format(TRIAL))))
         prob = (1 - w) * model.predict(trees, bar) + w * prob
 
     print("4/4 fuse, decode, write", flush=True)
     obs = fuse.broadcast_obs(signals)
     prob = fuse.apply(prob, obs, fuse.em_likelihoods(prob, obs, 3, bar["graded"]))
-    codes = decode.decode(prob, bar["halves"], min_run=25, **settings["decoder"])
+    costs = dict(settings["decoder"])
+    if "adaptive" in settings:
+        a = settings["adaptive"]
+        costs["c_switch"], shares = decode.adaptive_switch(prob, bar["halves"], a["target"], a["floor"],
+                                                           **costs)
+        print("adaptive switch cost {} (kept share {:.3f}, target {:.3f})".format(
+            costs["c_switch"], shares[costs["c_switch"]], a["target"]))
+    codes = decode.decode(prob, bar["halves"], min_run=25, **costs)
     labels = np.array(["H", "A", "D", "X"])[codes]
     with open(args.out, "w") as handle:
         handle.write("frame,label\n")

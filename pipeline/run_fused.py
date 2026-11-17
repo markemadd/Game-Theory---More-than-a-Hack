@@ -13,7 +13,7 @@ import os
 
 import numpy as np
 
-from . import broadcast, config, decode, fuse, io_atd, pose_cues
+from . import broadcast, config, decode, fuse, io_atd, pose_cues, smart_tagging
 
 
 def main():
@@ -53,6 +53,12 @@ def main():
         elif name == "pose":
             obs = pose_cues.observations()
             n_cat = 3
+        elif name == "smarttag":
+            obs = smart_tagging.observations(len(prob))
+            table = smart_tagging.em_likelihoods(prob, obs, g)
+            print("smarttag: P(obs|H,A,D)\n", table.round(3))
+            prob = smart_tagging.apply(prob, obs, table)
+            continue
         else:
             raise ValueError("unknown signal " + name)
         table = fuse.em_likelihoods(prob, obs, n_cat, g)

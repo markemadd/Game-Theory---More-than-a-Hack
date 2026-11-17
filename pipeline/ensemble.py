@@ -1,6 +1,6 @@
 """Compare experts and their ensemble on the external out-of-fold predictions.
 
-    python -m pipeline.ensemble --trial 3
+    python -m pipeline.ensemble --trial 3 [--adaptive]
 
 For each candidate (trees, GRU, weighted average), the decoder costs are re-tuned on the same
 out-of-fold matches, so every row is the best that candidate can do. Saves the winning weight
@@ -47,9 +47,18 @@ def main():
               "poss {:.0f} | decoder {}".format(w, acc, best[1], best[3], best[2], best[4], best[0]),
               flush=True)
     w, _, setting, sf, mf, _, _ = max(rows, key=lambda r: r[3])
+    out = {"gru_weight": w, "decoder": dict(zip(("alpha", "c_switch", "c_in", "c_out"), setting)),
+           "spell_f1": sf, "macro_f1": mf}
+    if "--adaptive" in sys.argv:
+        # share of the model's own team changes the chosen decoder keeps on these matches; the
+        # submission lowers its switch cost on the provided match until it keeps the same share
+        probs = {m: (1 - w) * tree[m] + w * seq[m] for m in ids}
+        share = float(np.mean([decode.kept_share(probs[m], matches[m]["halves"], **out["decoder"])
+                               for m in ids]))
+        out["adaptive"] = {"target": round(share, 4), "floor": 4}
+        print("adaptive switch cost: kept-share target", round(share, 4))
     with open(os.path.join(io_atd.CACHE_DIR, "ensemble_t{}.json".format(t)), "w") as handle:
-        json.dump({"gru_weight": w, "decoder": dict(zip(("alpha", "c_switch", "c_in", "c_out"), setting)),
-                   "spell_f1": sf, "macro_f1": mf}, handle)
+        json.dump(out, handle)
     print("best: GRU weight", w, "decoder", setting)
 
 

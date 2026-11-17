@@ -29,6 +29,8 @@ making their tracking look like ours.
 5. **Two frame models.** Gradient-boosted trees on single frames, and a bidirectional GRU that
    reads the features at 5 Hz. The GRU is trained with a loss weighted towards short
    possessions: plain cross-entropy counts frames, while the ranking metric counts possessions.
+   It also has a second output trained to predict where a new possession starts; that output
+   is not used at inference, but learning it makes the H/A/D probabilities better.
    Final probabilities are 0.75 GRU + 0.25 trees.
 6. **Our own ball detector** (`ball_detector.py`). The ATD has no ball on 40.7% of graded frames.
    A public pre-trained YOLO11s was fine-tuned on the tactical video with labels produced by
@@ -60,7 +62,7 @@ ball is missing, which is most of the stoppage time in this ATD.
 Tried and dropped: pose cues from the tactical video (throw-in posture and raised arms from a
 public pose model; real but changed 0.23% of frames); the broadcast ATD's ball as a gap filler
 (covers 9% of the remaining gaps and is noisier than ours); the referee's whistle from the
-tactical video's audio (dominated by crowd noise). Not used: Smart Tagging, broadcast video.
+tactical video's audio (dominated by crowd noise). Smart Tagging was fused like the broadcast (team per phase, set-piece restarts, likelihoods by EM): its team evidence is coherent, but its ~20 s phases merge short possessions, so it was dropped. A duration-aware (semi-Markov) decoder matched but did not beat the fixed-cost one (external spellF1 0.743 both): most missed possessions are absent from the probabilities, not lost in decoding. Shirt colours at the ball (a home/away colour classifier trained on the tracking's own team assignment, 98.5% on held-out minutes) mostly repeat what the nearest tracked player already says, and nearest-to-the-ball is often the pressing defender, so it adds little the features do not already have. Both of these signals exist only for the provided match, so the external matches cannot score them; they were dropped for these structural reasons, and their public-window numbers in `pipeline/TRIALS.md` are recorded as a check only. An adaptive decoder switch cost (lowered on a match whose probabilities are less sharp, see *Limitations*) helped in one training seed and not in a second, so it is not used. Not used: broadcast video.
 
 ## Training data
 
@@ -97,10 +99,15 @@ Leave-one-match-out on the seven external matches, each degraded like the ATD:
 | trees + decoder | 0.647 | 0.910 |
 | GRU + decoder (ATD ball only, trial 3) | 0.703 | 0.916 |
 | GRU + decoder (with the filled-ball gap profile, trial 5) | 0.736 | 0.929 |
-| **submitted: weighted GRU 0.75 + trees 0.25** | **0.743** | **0.931** |
+| weighted GRU 0.75 + trees 0.25 (trial 6) | 0.743 | 0.931 |
+| **submitted: same, GRU also trained to predict possession starts (trial 7)** | **0.753** | **0.933** |
 
-Public 5-minute window (17 possessions, a check only): spellF1 0.788, macroF1 0.931, frame
-accuracy 93.8%, dead-ball recall 0.85 at precision 0.97.
+Retrained with a second seed, trial 6 scores 0.741 / 0.930 and trial 7 0.745 / 0.934: trial 7 is ahead with both
+seeds (+0.010 and +0.004 spellF1) and at every decoder setting tried, so the choice does not rest on one lucky run.
+
+Public 5-minute window (17 possessions, a check only, never used to choose): spellF1 0.671, macroF1
+0.922, frame accuracy 93.2%, 17 possessions found, dead-ball recall 0.82 at precision 0.97. The
+evaluation tool's bootstrap puts the noise band on this window at about 0.33 spellF1.
 
 ## Limitations
 
@@ -115,6 +122,13 @@ accuracy 93.8%, dead-ball recall 0.85 at precision 0.97.
 - **The ball is still missing on 25% of graded frames**, mostly during stoppages and long aerial
   balls. The detector was trained on labels that inherit the ATD's own blind spots.
 - **Stoppages with the ball in play** (fouls, offside) are the dead-ball frames still missed.
+- **Fewer possessions on the provided match than in validation.** Without any labels: the output
+  has 2.9 possessions per minute on the provided match against 3.4 on the external matches (true
+  3.2-4.2). Before decoding, the probabilities change team almost as often as on the external
+  matches, but more of those changes are sub-second flickers that the decoder removes. Part of
+  this may be real (long Barcelona spells); part is a transfer gap the external validation cannot
+  see. A label-free adaptive switch cost did not hold up across training seeds, so the decoder
+  is left as validated.
 - With more time: a possession-level loss or a segment model for short spells, a detector
   trained on external football video, and a whistle detector robust to crowd noise.
 
@@ -142,10 +156,11 @@ bash pipeline/fetch_idsse.sh                                   # external matche
 .venv/bin/python -m pipeline.ball_detector label_agree         # algorithmic ball labels
 .venv/bin/python -m pipeline.ball_detector train --base yolo11s.pt --epochs 20
 .venv/bin/python -m pipeline.ball_detector fill --weights cache/ball/runs/ball_agree/weights/best.pt
-.venv/bin/python -m pipeline.cv --trial 6                      # trees: validation + decoder
-.venv/bin/python -m pipeline.seq_model --trial 6               # GRU: validation
-.venv/bin/python -m pipeline.ensemble --trial 6                # mix + decoder -> cache/ensemble_t6.json
-.venv/bin/python -m pipeline.run_trial --trial 6               # trees on all matches -> models/
-.venv/bin/python -m pipeline.seq_model --trial 6 --final       # GRU on all matches -> models/
-cp cache/ensemble_t6.json models/settings_t6.json && cp cache/ball/runs/ball_agree/weights/best.pt models/ball_detector.pt
+.venv/bin/python -m pipeline.cv --trial 7                      # trees: validation (same trees as trial 6)
+.venv/bin/python -m pipeline.seq_model --trial 7               # GRU: validation
+.venv/bin/python -m pipeline.ensemble --trial 7                # mix + decoder -> cache/ensemble_t7.json
+.venv/bin/python -m pipeline.run_trial --trial 6               # trees on all matches -> models/trees_t6.joblib
+.venv/bin/python -m pipeline.seq_model --trial 7 --final       # GRU on all matches -> models/gru_t7.pt
+# models/settings_t7.json = cache/ensemble_t7.json plus "trees": "trees_t6.joblib"
+cp cache/ball/runs/ball_agree/weights/best.pt models/ball_detector.pt
 ```

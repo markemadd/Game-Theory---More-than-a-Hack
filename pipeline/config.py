@@ -25,8 +25,15 @@ TRIALS = {
     6: dict(ball_sigma=7.0, ball_noise_m=0.3, touch_dv=2.5, restart_features=True,
             dead_ball_behaviour=True, still_mask=0.1, oob_mask=0.4, filled_ball=True,
             seq_epochs=8, seq_spell_power=0.5),
+    # Trial 7: trial 6 + a second GRU output trained to predict where a new possession starts;
+    # training on it improves the H/A/D output. The submission does not feed it to the decoder
+    # (decode.py beta/gamma were tried and added nothing).
+    7: dict(ball_sigma=7.0, ball_noise_m=0.3, touch_dv=2.5, restart_features=True,
+            dead_ball_behaviour=True, still_mask=0.1, oob_mask=0.4, filled_ball=True,
+            seq_epochs=8, seq_spell_power=0.5, seq_change_weight=1.0),
 }
-LATEST = max(TRIALS)
+LATEST = 7  # the submitted trial
+LATEST_ALL = max(TRIALS)
 
 TRIAL = int(os.environ.get("MTAH_TRIAL", LATEST))
 CFG = dict(TRIALS[TRIAL])

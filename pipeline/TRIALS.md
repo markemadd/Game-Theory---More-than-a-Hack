@@ -257,3 +257,107 @@ match-to-match noise (sd 0.025).
 Public window (sanity check, 17 possessions): trial5b (trial 5, own decoder) spellF1 0.679,
 macroF1 0.933, identical to trial5; trial6 spellF1 0.788, macroF1 0.931. The files differ on
 3.8% of graded frames.
+
+## 17 Nov: possession-level decoder and Smart Tagging, tried, not kept
+
+**Duration-aware decoder (`pipeline/hsmm.py`).** Explicit-duration (semi-Markov) Viterbi: each
+whole run is scored with the frame evidence plus a learned log-probability of its length
+(possession and stoppage length distributions from the external matches, estimated
+leave-one-match-out). Grid over evidence scale, duration weight and transition costs, on the
+saved trial 6 out-of-fold probabilities: best spellF1 0.7426, macroF1 0.9312, against 0.7434 /
+0.9309 for the fixed-cost decoder. No gain.
+
+Why: the possessions we miss are mostly not a decoding problem. Of 749 true possessions missed
+at IoU 0.5 on the external matches, 41% have no same-team prediction overlapping them at all,
+and of those that do overlap, 80% are swallowed by a predicted possession 2.5x longer (median):
+the short opponent spell or stoppage in between is not in the probabilities. For missed spells
+under 5 s the model gives the true team 0.50 on average against 0.44 for the other one; for the
+spells we find, 0.82 against 0.16. Better evidence, not a better decoder, is what is needed.
+
+**Smart Tagging fusion (`pipeline/smart_tagging.py`, `run_fused --signals broadcast,smarttag`).**
+Metrica's automatic phases (638, covering 82% of graded frames) as a categorical observation per
+frame: attacking phase / attacking transition / set piece x team, "3 s before a set piece",
+no phase. Fused like the broadcast, with a separate likelihood row for H, A and D, EM-estimated
+on the match from the model's own probabilities. The learned table is coherent: an attacking
+phase tagged Barcelona is 3.8x more likely under H than A, one tagged Athletic 3.3x more likely
+under A; the 3 s before a set piece is 5-13x more likely in dead ball. But phases last about
+20 s, so the fusion merges possessions (307 -> 280 H/A runs on the match), the direction we
+already err in. Public window (check only): spellF1 0.788 -> 0.671 at full weight, 0.691 at
+half weight. Not kept.
+
+**Checks on both (17 Nov).**
+- The semi-Markov decoder reproduces `decode.py` exactly when its duration prior is switched off
+  (identical labels at three cost settings), so the dynamic programme is right. Weakening the
+  frame evidence so durations matter more (scale 0.05-0.3) only lowers external spellF1
+  (0.737 at best, down to 0.53).
+- Smart Tagging's sharp signals are already in our labels: within 5 s of the 24 tagged attacking
+  transitions we already switch to the tagged team 92% of the time, and after corners, goal kicks
+  and free kicks we give the first possession to the tagged team 90-100% of the time (the 26
+  throw-ins carry no team). What it adds beyond that is a team per ~20 s phase. Fusing that per
+  frame also counts one phase hundreds of times as if every frame were independent evidence,
+  which is why it overrides short opponent spells; one observation per phase would be the
+  principled version, and would then move almost nothing.
+
+## 17 Nov: team colours at the ball (`pipeline/team_colour.py`), tried, not kept
+
+1. Player height in the image from pixel statistics (3,657 isolated tracked players): about 2.4x
+   the local ground scale; torso box at 50-80% of it.
+2. Shirt-colour classifier trained on the ATD's own team assignment (no human labels): 53,320
+   torso crops, every 5th minute held out. Held-out accuracy 98.5%.
+3. On every 5th graded frame with a (filled) ball: every person within 2 m of the ball, tracked or
+   not, classified and weighted by distance. 24,169 frames: a person at the ball on 53.5%, a clear
+   majority colour on 43.0%. Where a tracked player is also within 2 m, the colour agrees with
+   that player's team 97%.
+4. Fused like the other signals (H/A/D likelihoods by EM, each sample counted once). EM finds a
+   strong signal: home colour at the ball is 21x more likely under H than A, away colour 12x more
+   likely under A. But it is mostly what the features already know (the nearest tracked player),
+   and nearest-to-the-ball is not possession: a pressing defender is often closest. Fused at
+   full weight it changes 1,021 graded frames; in the public window 66 of the 92 changed frames
+   become wrong and 26 right (spellF1 0.788 -> 0.697). Restricted to frames with no tracked
+   player near the ball (the only new information), it changes about 120 frames and nothing in
+   the public scores at half weight.
+
+## 17 Nov: trial 7, possession-change output on the GRU (submitted)
+
+The GRU gets a second output trained to fire where a new H/A possession starts (binary
+cross-entropy, positives ±1 step at 5 Hz, `pos_weight` 4, loss weight 1.0; `seq_model.py`
+`change_target`). Everything else is trial 6. Leave-one-match-out, seven matches, same
+degradation and seeds:
+
+| | spellF1 | macroF1 | per match |
+|---|---|---|---|
+| trial 6 (mix 0.75, best decoder) | 0.7437 | 0.9311 | .708 .764 .743 .771 .727 .720 .774 |
+| trial 7 (mix 0.75, best decoder) | 0.7530 | 0.9335 | .720 .749 .777 .780 .741 .726 .778 |
+
+- Better on 6 of 7 matches, and better than trial 6 at all 100 identical decoder-cost settings
+  tried (grid median 0.7506 vs 0.7419), so the gain does not come from tuning.
+- The change output itself is informative on held-out matches (mean 0.46-0.50 at true
+  possession starts, 0.03 elsewhere). Feeding it to the decoder (entering a possession made
+  cheaper where it fires, multiplicatively `beta` or in log-odds `gamma`) adds nothing
+  (0.751-0.753). The gain comes from multitask training improving the H/A/D probabilities.
+  The submission therefore uses only the H/A/D output.
+- Standard selection (`pipeline.ensemble --trial 7`): GRU weight 0.75, decoder costs
+  (12, 24, 32), spellF1 0.7527, macroF1 0.9334. The trees are trial 6's (same features and fit).
+
+**Seed check (17 Nov).** Both trials retrained on every fold with seed 2028 (mix 0.75, their own
+decoder settings): trial 6 0.7413 / 0.9304, trial 7 0.7454 / 0.9341. Trial 7 leads with both seeds
+(+0.0096 with 6/7 match wins, +0.0041 with 4/7), and averaged over the seeds at all 32 shared
+decoder settings (median +0.006). Its per-match scores also move less between seeds (sd 0.010 vs
+0.024).
+
+## 17 Nov: possession rate on the provided match; adaptive switch cost, tried, not kept
+
+No labels used. On the provided match both trials output 2.9 possessions per minute; on the
+external matches the same pipeline outputs 3.4 (truth 3.8, range 3.2-4.2), with the same
+dead-ball share (45%). Before decoding, the probabilities change team 3.1 times per minute on the
+provided match vs 3.3 externally; the decoder keeps 89% of those changes externally but 76% on
+the provided match (live-frame confidence 0.895 vs 0.922: the changes are softer and shorter).
+
+Rule tried (`decode.adaptive_switch`, `ensemble --adaptive`): lower the switch cost on a match
+until the decoder keeps the external share of the model's own team changes (0.887), floor 4.
+Seed 2027: harmless without shift (0.7545 vs 0.7530) and +0.005 when the external probabilities
+are blurred to the provided match's confidence (temperature 1.4). Seed 2028: -0.0017 without
+shift, -0.0008 with it; the kept share itself moves with the seed. Not kept. On the provided match
+it would have chosen cost 4 (3.1 possessions per minute, 0.35% of graded frames changed).
+
+**Submitted: trial 7** (`models/gru_t7.pt`, `models/settings_t7.json`, trees `trees_t6.joblib`).

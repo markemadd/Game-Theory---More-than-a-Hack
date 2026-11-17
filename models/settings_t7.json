@@ -1,0 +1,1 @@
+{"gru_weight": 0.75, "decoder": {"alpha": 1.0, "c_switch": 12, "c_in": 24, "c_out": 32}, "spell_f1": 0.7527251989522502, "macro_f1": 0.9334344309896532, "trees": "trees_t6.joblib"}

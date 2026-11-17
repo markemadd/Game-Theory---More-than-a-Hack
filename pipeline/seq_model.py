@@ -62,16 +62,31 @@ def sequences(match, profile, seed):
 
 
 class Net(nn.Module):
-    def __init__(self, n_in, hidden=64):
+    def __init__(self, n_in, hidden=64, change_head=False):
         super().__init__()
         self.inp = nn.Sequential(nn.Linear(n_in, 96), nn.ReLU(), nn.Dropout(0.1))
         self.gru = nn.GRU(96, hidden, num_layers=2, batch_first=True, bidirectional=True,
                           dropout=0.1)
         self.out = nn.Linear(2 * hidden, 3)
+        self.change = nn.Linear(2 * hidden, 1) if change_head else None
 
-    def forward(self, x):
+    def forward(self, x, with_change=False):
         h, _ = self.gru(self.inp(x))
+        if with_change:
+            return self.out(h), self.change(h)[..., 0]
         return self.out(h)
+
+
+def change_target(y, dilate=1):
+    """1 at the 5 Hz steps where a new H or A run starts (a change of possession, or play
+    resuming with a team in possession), dilated by +/- `dilate` steps; -1 where unlabelled."""
+    t = np.zeros(len(y), np.float32)
+    start = np.flatnonzero((y[1:] != y[:-1]) & np.isin(y[1:], (0, 1)) & (y[:-1] >= 0)) + 1
+    for k in range(-dilate, dilate + 1):
+        idx = np.clip(start + k, 0, len(y) - 1)
+        t[idx] = 1.0
+    t[y < 0] = -1.0
+    return t
 
 
 class Scaler:
@@ -104,32 +119,46 @@ def train(seqs, seed=SEED):
     epochs = config.CFG.get("seq_epochs", EPOCHS)
     hidden = config.CFG.get("seq_hidden", 64)
     power = config.CFG.get("seq_spell_power", 0.0)
+    cp_w = config.CFG.get("seq_change_weight", 0.0)
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     scaler = Scaler().fit(seqs)
-    data = [(scaler(x), y, spell_weights(y, power) if power else None)
+    data = [(scaler(x), y, spell_weights(y, power) if power else None,
+             change_target(y) if cp_w else None)
             for x, y in seqs if len(x) > WIN]
     dev = device()
-    net = Net(data[0][0].shape[1], hidden).to(dev)
+    net = Net(data[0][0].shape[1], hidden, change_head=bool(cp_w)).to(dev)
+    bce = nn.BCEWithLogitsLoss(reduction="none", pos_weight=torch.tensor(4.0, device=dev))
     opt = torch.optim.AdamW(net.parameters(), lr=2e-3, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=epochs * EPOCH_STEPS)
     loss_fn = nn.CrossEntropyLoss(ignore_index=-1, reduction="none" if power else "mean")
     net.train()
     for _ in range(epochs * EPOCH_STEPS):
-        xb, yb, wb = [], [], []
+        xb, yb, wb, cb = [], [], [], []
         for _ in range(BATCH):
-            x, y, w = data[rng.integers(len(data))]
+            x, y, w, c = data[rng.integers(len(data))]
             s = rng.integers(0, len(x) - WIN)
             xb.append(x[s:s + WIN])
             yb.append(y[s:s + WIN])
             if power:
                 wb.append(w[s:s + WIN])
+            if cp_w:
+                cb.append(c[s:s + WIN])
         xb = torch.from_numpy(np.stack(xb)).to(dev)
         yb = torch.from_numpy(np.stack(yb)).long().to(dev)
-        loss = loss_fn(net(xb).reshape(-1, 3), yb.reshape(-1))
+        if cp_w:
+            logits, cl = net(xb, with_change=True)
+        else:
+            logits = net(xb)
+        loss = loss_fn(logits.reshape(-1, 3), yb.reshape(-1))
         if power:
             wt = torch.from_numpy(np.stack(wb)).to(dev).reshape(-1) * (yb.reshape(-1) >= 0)
             loss = (loss * wt).sum() / wt.sum()
+        if cp_w:
+            ct = torch.from_numpy(np.stack(cb)).to(dev).reshape(-1)
+            m = (ct >= 0).float()
+            lc = bce(cl.reshape(-1), ct.clamp(min=0))
+            loss = loss + cp_w * (lc * m).sum() / m.sum()
         opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(net.parameters(), 1.0)
@@ -139,27 +168,37 @@ def train(seqs, seed=SEED):
     return net, scaler
 
 
-def predict(net, scaler, match):
-    """(n, 3) probabilities at 25 Hz, symmetrised over both team perspectives."""
+def _up(a, seg):
+    up = np.repeat(a, STEP, 0)
+    if len(up) < seg:
+        up = np.concatenate([up, np.repeat(up[-1:], seg - len(up), 0)])
+    return up[:seg]
+
+
+def predict(net, scaler, match, with_change=False):
+    """(n, 3) probabilities at 25 Hz, symmetrised over both team perspectives; with_change also
+    returns (n,) the probability that a new possession starts here (NaN outside the halves)."""
     n = len(match["ball"])
     prob = np.full((n, 3), 1.0 / 3, np.float32)
     dev = device()
-    parts = []
+    parts, cps = [], []
     for swap in (False, True):
         X = features.build(match, swap=swap).to_numpy(np.float32)
         p = np.full((n, 3), 1.0 / 3, np.float32)
+        c = np.full(n, np.nan, np.float32)
         for lo, hi in match["halves"]:
             xs = scaler(to_steps(X[lo:hi]))
             with torch.no_grad():
-                logits = net(torch.from_numpy(xs)[None].to(dev))[0]
-            ps = torch.softmax(logits, -1).cpu().numpy()
-            up = np.repeat(ps, STEP, 0)
-            seg = hi - lo
-            if len(up) < seg:
-                up = np.vstack([up, np.repeat(up[-1:], seg - len(up), 0)])
-            p[lo:hi] = up[:seg]
+                out = net(torch.from_numpy(xs)[None].to(dev), with_change=with_change)
+            logits = out[0][0] if with_change else out[0]
+            p[lo:hi] = _up(torch.softmax(logits, -1).cpu().numpy(), hi - lo)
+            if with_change:
+                c[lo:hi] = _up(torch.sigmoid(out[1][0]).cpu().numpy(), hi - lo)
         parts.append(p[:, model.SWAP] if swap else p)
+        cps.append(c)
     prob[:] = (parts[0] + parts[1]) / 2
+    if with_change:
+        return prob, (cps[0] + cps[1]) / 2
     return prob
 
 
@@ -178,7 +217,8 @@ def load():
     blob = torch.load(weights_path(), map_location="cpu", weights_only=True)
     scaler = Scaler()
     scaler.mu, scaler.sd = blob["mu"].numpy(), blob["sd"].numpy()
-    net = Net(len(scaler.mu), config.CFG.get("seq_hidden", 64))
+    net = Net(len(scaler.mu), config.CFG.get("seq_hidden", 64),
+              change_head=bool(config.CFG.get("seq_change_weight", 0)))
     net.load_state_dict(blob["state"])
     return net.to(device()).eval(), scaler
 
